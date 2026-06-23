@@ -137,25 +137,58 @@ The Application manifest (`argocd/app/application.yaml`) already has the require
 
 ### Install
 
+**Step 1 — Add the Helm repo**
+
 ```bash
-make fluxcd-install
-# or manually:
-helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts && helm repo update
+helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts
+helm repo update
+```
+
+**Step 2 — Install Flux with image automation controllers**
+
+```bash
 kubectl create namespace flux-system
+
 helm install flux fluxcd-community/flux2 \
   --namespace flux-system \
   --set imageAutomationController.create=true \
   --set imageReflectorController.create=true
 ```
 
-### Install the Flux CLI
+**Step 3 — Wait for all pods to be running**
 
 ```bash
-brew install fluxcd/tap/flux   # macOS
-# or
-curl -s https://fluxcd.io/install.sh | sudo bash   # Linux
+kubectl get pods -n flux-system --watch
+```
+
+You should see 6 pods reach `Running` status:
+
+```
+helm-controller                  Running
+image-automation-controller      Running
+image-reflector-controller       Running
+kustomize-controller             Running
+notification-controller          Running
+source-controller                Running
+```
+
+**Step 4 — Install the Flux CLI**
+
+```bash
+# macOS
+brew install fluxcd/tap/flux
+
+# Linux
+curl -s https://fluxcd.io/install.sh | sudo bash
+```
+
+**Step 5 — Verify everything is healthy**
+
+```bash
 flux check
 ```
+
+All checks should return `✔`. If any controller is not ready, wait a few seconds and re-run.
 
 ### Deploy the sample app
 

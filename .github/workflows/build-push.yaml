@@ -1,0 +1,41 @@
+name: Build and Push Image
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/mikeebraga/gitops-demo
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: meta
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sample-app/src/${{ steps.meta.outputs.VERSION }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.VERSION }}
+            ${{ env.IMAGE }}:latest

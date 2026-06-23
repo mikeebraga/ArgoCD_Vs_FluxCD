@@ -3,6 +3,14 @@ kind: Application
 metadata:
   name: gitops-demo
   namespace: argocd
+  annotations:
+    # These annotations are what Argo Image Updater reads.
+    # Without the separate image-updater install, these do nothing.
+    argocd-image-updater.argoproj.io/image-list: gitops-demo=ghcr.io/mikeebraga/gitops-demo
+    argocd-image-updater.argoproj.io/gitops-demo.update-strategy: semver
+    argocd-image-updater.argoproj.io/gitops-demo.allow-tags: regexp:^v[0-9]+\.[0-9]+\.[0-9]+$
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
 spec:
   project: default
   source:

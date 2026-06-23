@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: gitops-demo
-          image: nginx:alpine
+          image: ghcr.io/mikeebraga/gitops-demo:v1.0.0 # {"$imagepolicy": "flux-system:gitops-demo"}
           ports:
             - containerPort: 80
           resources:

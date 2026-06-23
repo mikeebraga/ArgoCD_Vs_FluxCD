@@ -1,35 +1,22 @@
 # ArgoCD vs FluxCD — GitOps Tooling Comparison
 
-A hands-on technical comparison of the two leading GitOps tools for Kubernetes. Both tools reconcile cluster state from a Git repository, but they differ significantly in architecture, UX, and the scenarios where each shines.
+A hands-on technical comparison focused on one of the most impactful practical differences between the two tools: **built-in image update automation**. FluxCD handles this natively. ArgoCD requires a separate component (Argo Image Updater) to achieve the same result.
 
 ---
 
 ## Prerequisites
 
 - Docker Desktop with Kind enabled
-- `kubectl` configured against your cluster
-- `helm` (see installation below)
+- `kubectl`
+- `helm` (see below)
 - `flux` CLI (see FluxCD section)
-- `argocd` CLI (optional, see ArgoCD section)
-
----
-
-## Cluster Setup
-
-This demo uses a 3-node Kind cluster (1 control-plane + 2 workers).
-
-```bash
-kind create cluster --config kind/cluster.yaml
-kubectl get nodes
-```
+- GitHub account with a PAT scoped to `read:packages` + `write:packages`
 
 ---
 
 ## 1. Helm Installation
 
-Helm is required to install both ArgoCD and FluxCD.
-
-### macOS (Homebrew)
+### macOS
 
 ```bash
 brew install helm
@@ -41,13 +28,11 @@ brew install helm
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-### Windows (Chocolatey)
+### Windows
 
 ```bash
 choco install kubernetes-helm
 ```
-
-### Verify
 
 ```bash
 helm version
@@ -55,186 +40,259 @@ helm version
 
 ---
 
-## 2. ArgoCD
-
-### Add the Helm repository
+## 2. Cluster Setup
 
 ```bash
-helm repo add argo https://argoproj.github.io/argo-helm
-helm repo update
+kind create cluster --config kind/cluster.yaml
+kubectl get nodes
+# NAME                    STATUS   ROLES
+# gitops-demo-control-plane   Ready    control-plane
+# gitops-demo-worker          Ready    <none>
+# gitops-demo-worker2         Ready    <none>
 ```
 
-### Install (latest version)
+---
+
+## 3. Sample App
+
+A minimal nginx app with two visible versions to make the demo obvious.
+
+| Version | Accent colour | Badge |
+|---------|--------------|-------|
+| `v1.0.0` | Green | — |
+| `v2.0.0` | Orange | "Auto-updated by Flux Image Automation" |
+
+Both versions are in `sample-app/src/v1` and `sample-app/src/v2`. The GitHub Actions workflow in `.github/workflows/build-push.yaml` builds and pushes to GHCR automatically when you push a `v*` tag.
+
+```
+sample-app/
+├── src/
+│   ├── v1/  →  ghcr.io/mikeebraga/gitops-demo:v1.0.0
+│   └── v2/  →  ghcr.io/mikeebraga/gitops-demo:v2.0.0
+└── manifests/
+    ├── namespace.yaml
+    ├── deployment.yaml   ← contains the $imagepolicy marker for Flux
+    └── service.yaml
+```
+
+### Push the images (GitHub Actions does this on tag push)
 
 ```bash
+make tag-v1   # git tag v1.0.0 + git push origin v1.0.0
+make tag-v2   # git tag v2.0.0 + git push origin v2.0.0
+```
+
+---
+
+## 4. ArgoCD
+
+### Install
+
+```bash
+make argocd-install
+# or manually:
+helm repo add argo https://argoproj.github.io/argo-helm && helm repo update
 kubectl create namespace argocd
-
-helm install argocd argo/argo-cd \
-  --namespace argocd \
-  --set server.service.type=ClusterIP
-```
-
-### Verify the installation
-
-```bash
-kubectl get pods -n argocd
-kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=120s
+helm install argocd argo/argo-cd --namespace argocd --set server.service.type=ClusterIP
 ```
 
 ### Access the UI
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
+make argocd-ui          # port-forward to https://localhost:8080
+make argocd-password    # print the initial admin password
 ```
 
-Open [https://localhost:8080](https://localhost:8080) in your browser.
-
-### Get the initial admin password
+### Deploy the sample app
 
 ```bash
-kubectl get secret argocd-initial-admin-secret -n argocd \
-  -o jsonpath="{.data.password}" | base64 -d && echo
+make argocd-app
+# kubectl apply -f argocd/app/application.yaml
 ```
 
-Login with username `admin` and the password above.
+ArgoCD syncs `sample-app/manifests` from this repo and deploys the app. It will stay on **v1.0.0** until the manifest is updated manually — or until Argo Image Updater is installed.
 
-### Install the ArgoCD CLI (optional)
+### Image automation with Argo Image Updater (extra component required)
 
 ```bash
-# macOS
-brew install argocd
+# 1. Create the GHCR credential secret
+bash argocd/image-updater/ghcr-secret.sh
 
-# Linux
-curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-chmod +x argocd && sudo mv argocd /usr/local/bin/
+# 2. Install Argo Image Updater via Helm
+helm install argocd-image-updater argo/argocd-image-updater \
+  --namespace argocd \
+  --values argocd/image-updater/values.yaml
+
+# or:
+make argocd-image-updater
 ```
 
-### Deploy the sample app via ArgoCD
+The Application manifest (`argocd/app/application.yaml`) already has the required annotations. With Image Updater running, ArgoCD will now detect new semver tags and commit the update back to Git.
 
-```bash
-kubectl apply -f argocd/app/application.yaml
-```
-
-ArgoCD will detect the `sample-app/manifests` path in this repository and sync it automatically.
+> **This is the friction point.** What required 3 steps and an extra Helm release in ArgoCD is built into FluxCD out of the box.
 
 ---
 
-## 3. FluxCD
+## 5. FluxCD
 
-### Add the Helm repository
-
-```bash
-helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts
-helm repo update
-```
-
-### Install (latest version)
+### Install
 
 ```bash
+make fluxcd-install
+# or manually:
+helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts && helm repo update
 kubectl create namespace flux-system
-
 helm install flux fluxcd-community/flux2 \
   --namespace flux-system \
   --set imageAutomationController.create=true \
   --set imageReflectorController.create=true
 ```
 
-### Verify the installation
-
-```bash
-kubectl get pods -n flux-system
-```
-
 ### Install the Flux CLI
 
 ```bash
-# macOS
-brew install fluxcd/tap/flux
-
-# Linux
-curl -s https://fluxcd.io/install.sh | sudo bash
-```
-
-### Verify the CLI
-
-```bash
+brew install fluxcd/tap/flux   # macOS
+# or
+curl -s https://fluxcd.io/install.sh | sudo bash   # Linux
 flux check
 ```
 
-### Deploy the sample app via FluxCD
+### Deploy the sample app
 
 ```bash
-kubectl apply -f fluxcd/app/gitrepository.yaml
-kubectl apply -f fluxcd/app/kustomization.yaml
+make fluxcd-app
+# kubectl apply -f fluxcd/app/gitrepository.yaml
+# kubectl apply -f fluxcd/app/kustomization.yaml
 ```
 
-Check sync status:
+### Image automation — native, no extra install
 
 ```bash
-flux get sources git
-flux get kustomizations
+make fluxcd-image-automation
+# This runs:
+#   bash fluxcd/image-automation/ghcr-secret.sh      ← GHCR auth
+#   kubectl apply -f fluxcd/image-automation/imagerepository.yaml
+#   kubectl apply -f fluxcd/image-automation/imagepolicy.yaml
+#   kubectl apply -f fluxcd/image-automation/imageupdateautomation.yaml
 ```
+
+Check status:
+
+```bash
+make fluxcd-status
+# flux get sources git
+# flux get kustomizations
+# flux get images all -n flux-system
+```
+
+### How it works
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Flux Image Automation                 │
+│                                                         │
+│  GHCR registry                                          │
+│    └── ImageRepository (polls every 1m)                 │
+│          └── ImagePolicy (semver >=v1.0.0)              │
+│                └── ImageUpdateAutomation                │
+│                      ├── rewrites deployment.yaml tag   │
+│                      ├── commits to main                │
+│                      └── Kustomization reconciles       │
+└─────────────────────────────────────────────────────────┘
+```
+
+The key is the marker comment in `sample-app/manifests/deployment.yaml`:
+
+```yaml
+image: ghcr.io/mikeebraga/gitops-demo:v1.0.0 # {"$imagepolicy": "flux-system:gitops-demo"}
+```
+
+When Flux detects `v2.0.0` on GHCR, it rewrites that line, commits to `main`, and the Kustomization reconciles the cluster — all without any manual intervention.
 
 ---
 
-## 4. Sample App
+## 6. The Demo: Push v2 and Watch Flux React
 
-A minimal nginx deployment used as the reconciliation target for both tools.
+```bash
+# 1. Ensure both tools are installed and the app is running on v1.0.0
+kubectl get pods -n demo
 
+# 2. Push the v2 tag — GitHub Actions builds and pushes ghcr.io/mikeebraga/gitops-demo:v2.0.0
+make tag-v2
+
+# 3. Watch Flux detect the new tag (within ~1 minute)
+flux get images all -n flux-system
+
+# 4. Flux commits the tag update to Git automatically — check your repo
+# git log --oneline -3
+
+# 5. Flux reconciles the cluster
+flux get kustomizations --watch
+
+# 6. Port-forward to see the app on v2.0.0
+kubectl port-forward svc/gitops-demo -n demo 8081:80
+# open http://localhost:8081
 ```
-sample-app/
-├── src/
-│   ├── index.html
-│   └── Dockerfile
-└── manifests/
-    ├── namespace.yaml
-    ├── deployment.yaml
-    └── service.yaml
-```
 
-Both ArgoCD and FluxCD point to `sample-app/manifests` in this repository. Any change pushed to `main` will be automatically reconciled in the cluster.
+With ArgoCD + Image Updater doing the equivalent — the steps are the same, but the setup required an extra component and extra credentials configuration.
 
 ---
 
-## 5. ArgoCD vs FluxCD — Quick Comparison
+## 7. Resource Comparison
 
-| | ArgoCD | FluxCD |
-|---|---|---|
-| **Architecture** | Centralized server + UI | Distributed controllers (no central server) |
-| **UI** | Rich built-in web UI | No built-in UI (integrates with Grafana/Weave GitOps) |
-| **CLI** | `argocd` CLI | `flux` CLI |
-| **Sync model** | Pull + manual/auto trigger | Pure pull (controller-based) |
-| **Multi-tenancy** | Projects + RBAC built-in | Namespace isolation via controllers |
-| **Helm support** | Native | Via HelmRelease CRD |
-| **Kustomize support** | Native | Native |
-| **Image automation** | Via Argo Image Updater (separate) | Built-in controller |
-| **Community & adoption** | Larger, CNCF Graduated | Smaller but growing, CNCF Graduated |
-| **Best for** | Teams wanting a UI, centralized control | GitOps purists, automation-heavy pipelines |
+```bash
+make compare-resources
+# or: bash scripts/resource-compare.sh
+```
 
-### When ArgoCD makes more sense
+Example output after both tools are installed:
+
+```
+--- ArgoCD pods (namespace: argocd) ---
+argocd-application-controller    Running
+argocd-applicationset-controller Running
+argocd-dex-server                Running
+argocd-notifications-controller  Running
+argocd-redis                     Running
+argocd-repo-server               Running
+argocd-server                    Running    ← API server + UI
+argocd-image-updater             Running    ← extra install for image automation
+Total pods: 8
+
+--- FluxCD pods (namespace: flux-system) ---
+helm-controller                  Running
+image-automation-controller      Running    ← built-in
+image-reflector-controller       Running    ← built-in
+kustomize-controller             Running
+notification-controller          Running
+source-controller                Running
+Total pods: 6
+```
+
+ArgoCD carries Redis, Dex (SSO), and a full API server — which give you the rich UI and centralised control, but at a resource cost. FluxCD's controllers are narrowly scoped and significantly lighter.
+
+---
+
+## 8. When to choose which
+
+### Choose ArgoCD when
 - Your team wants a visual dashboard to track app health across clusters
 - You need fine-grained RBAC with project isolation out of the box
 - You manage many apps across multiple clusters from a single control plane
+- Non-engineers need visibility into deployment state
 
-### When FluxCD makes more sense
+### Choose FluxCD when
 - You want a fully declarative, UI-less GitOps setup with no extra servers to manage
-- You need native image update automation (tag updates committed back to Git automatically)
-- You are running Flux as part of a larger platform with Grafana/Prometheus already in place
+- **Image update automation is a core part of your workflow** — this is Flux's clearest win
+- You are already running Grafana/Prometheus and don't need a separate UI
 - Minimal cluster footprint matters (Flux controllers are lightweight)
+- You prefer every piece of config to live as a CRD in Git, nothing centralised
 
 ---
 
 ## Cleanup
 
 ```bash
-# Remove ArgoCD
-helm uninstall argocd -n argocd
-kubectl delete namespace argocd
-
-# Remove FluxCD
-helm uninstall flux -n flux-system
-kubectl delete namespace flux-system
-
-# Delete the Kind cluster
-kind delete cluster --name gitops-demo
+make clean
+# Removes ArgoCD, ArgoCD Image Updater, FluxCD, demo namespace, and the Kind cluster
 ```

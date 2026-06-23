@@ -1,0 +1,26 @@
+apiVersion: image.toolkit.fluxcd.io/v1beta1
+kind: ImageUpdateAutomation
+metadata:
+  name: gitops-demo
+  namespace: flux-system
+spec:
+  interval: 1m0s
+  sourceRef:
+    kind: GitRepository
+    name: gitops-demo
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        name: Flux Image Automation
+        email: flux@mikeebraga.github.io
+      messageTemplate: |
+        chore: update gitops-demo image to {{ range .Updated.Images -}}{{ .NewTag }}{{ end }}
+    push:
+      branch: main
+  update:
+    # Flux rewrites files that contain the $imagepolicy marker comment
+    strategy: Setters
+    path: ./sample-app/manifests

@@ -1,0 +1,12 @@
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: gitops-demo
+  namespace: flux-system
+spec:
+  imageRepositoryRef:
+    name: gitops-demo
+  # Only consider tags that match semver vX.Y.Z — picks the latest
+  policy:
+    semver:
+      range: ">=v1.0.0"

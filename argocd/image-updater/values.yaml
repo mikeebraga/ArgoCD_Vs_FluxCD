@@ -1,0 +1,15 @@
+# Argo Image Updater — Helm values
+# This is the extra component ArgoCD needs to match what Flux does natively.
+# Install with:
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm install argocd-image-updater argo/argocd-image-updater \
+#     --namespace argocd \
+#     --values argocd/image-updater/values.yaml
+
+config:
+  registries:
+    - name: GitHub Container Registry
+      prefix: ghcr.io
+      api_url: https://ghcr.io
+      credentials: secret:argocd/ghcr-auth#token
+      defaultns: mikeebraga
